@@ -93,6 +93,7 @@ with torch.no_grad():
                       input_names=["input_features"], output_names=["cross_k", "cross_v"])
     pk3 = torch.zeros(L, 1, H, 3, D); pv3 = torch.zeros(L, 1, H, 3, D)
     torch.onnx.export(dmod, (ids, torch.tensor([3]), pk3, pv3, ck, cv), os.path.join(out, "decoder.onnx"), opset_version=17,
+                      do_constant_folding=False,  # keep one copy of the word table (used for input and output)
                       input_names=["input_ids", "offset", "past_k", "past_v", "cross_k", "cross_v"],
                       output_names=["logits", "new_k", "new_v"],
                       dynamic_axes={"input_ids": {1: "T"}, "past_k": {3: "P"}, "past_v": {3: "P"},
