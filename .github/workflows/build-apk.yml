@@ -45,6 +45,7 @@ jobs:
       - name: Test on real Qalun recitation
         continue-on-error: true
         run: |
+          sudo apt-get install -y -qq ffmpeg > /dev/null
           bash ci/report.sh "test audio" python ci/get_test_audio.py testaudio
           bash ci/report.sh "python reference" python ci/reference.py model_src testaudio/list.tsv testaudio/ref.tsv
           curl -sfL -o ort.jar "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime/$ORT_VERSION/onnxruntime-$ORT_VERSION.jar"
@@ -60,6 +61,7 @@ jobs:
           mkdir -p app/src/main/assets/whisper
           cp model/int8/* app/src/main/assets/whisper/
           ls -la app/src/main/assets/whisper
+          echo "::notice title=model files::$(cd model/int8 && ls -l | awk 'NR>1{printf "%s=%dKB ", $9, $5/1024}')"
 
       - name: Build
         run: |

@@ -28,7 +28,7 @@ for variant in ("fp32", "int8"):
             shutil.copy(src, dst)
             if os.path.exists(src + "_data"): shutil.copy(src + "_data", dst + "_data")
         else:
-            quantize_dynamic(src, dst, weight_type=QuantType.QInt8)
+            quantize_dynamic(src, dst, weight_type=QuantType.QUInt8, op_types_to_quantize=["MatMul", "Gather"])
 
 tok = WhisperTokenizer.from_pretrained(model_id)
 vocab = tok.get_vocab()
