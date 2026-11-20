@@ -6,6 +6,17 @@ from onnxruntime.quantization import quantize_dynamic, QuantType
 
 model_id, out = sys.argv[1], sys.argv[2]
 tmp = out + "_export"
+
+# Work from a local copy; fill in any processor/tokenizer files the fine-tuned repo lacks
+# from the original openai/whisper-tiny (same tokenizer and audio front-end).
+from huggingface_hub import snapshot_download
+local = snapshot_download(model_id, local_dir=out + "_src", allow_patterns=["*.json", "*.txt", "*.safetensors", "*.bin", "*.model"])
+base = snapshot_download("openai/whisper-tiny", local_dir=out + "_base", allow_patterns=["*.json", "*.txt"])
+for f in os.listdir(base):
+    if f not in os.listdir(local) and f != "model.safetensors":
+        shutil.copy(os.path.join(base, f), os.path.join(local, f)); print("added from openai/whisper-tiny:", f)
+print("model files:", sorted(os.listdir(local)))
+model_id = local
 main_export(model_id, output=tmp, task="automatic-speech-recognition", no_post_process=True)
 print("exported:", os.listdir(tmp))
 for variant in ("fp32", "int8"):

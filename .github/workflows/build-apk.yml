@@ -27,7 +27,9 @@ jobs:
         id: model-cache
         uses: actions/cache@v4
         with:
-          path: model
+          path: |
+            model
+            model_src
           key: model-${{ env.MODEL_ID }}-${{ hashFiles('ci/prepare_model.py') }}
 
       - name: Install Python tools
@@ -37,13 +39,13 @@ jobs:
 
       - name: Convert Quran speech model to ONNX
         if: steps.model-cache.outputs.cache-hit != 'true'
-        run: python ci/prepare_model.py "$MODEL_ID" model
+        run: bash ci/report.sh "model conversion" python ci/prepare_model.py "$MODEL_ID" model
 
       - name: Test on real Qalun recitation
         continue-on-error: true
         run: |
-          python ci/get_test_audio.py testaudio
-          python ci/reference.py "$MODEL_ID" testaudio/list.tsv testaudio/ref.tsv
+          bash ci/report.sh "test audio" python ci/get_test_audio.py testaudio
+          bash ci/report.sh "python reference" python ci/reference.py model_src testaudio/list.tsv testaudio/ref.tsv
           curl -sfL -o ort.jar "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime/$ORT_VERSION/onnxruntime-$ORT_VERSION.jar"
           mkdir -p e2e
           javac -encoding UTF-8 -cp ort.jar -d e2e $(find app/src/main/java/com/qalun/checker/core -name '*.java') ci/E2ETest.java
@@ -63,7 +65,7 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          bash ci/report.sh "gradle build" ./gradlew assembleDebug --no-daemon
           ls -la app/build/outputs/apk/debug/
           echo "::notice title=APK size::$(du -h app/build/outputs/apk/debug/app-debug.apk | cut -f1)"
 
