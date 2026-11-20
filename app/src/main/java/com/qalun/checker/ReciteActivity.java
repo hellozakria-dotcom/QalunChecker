@@ -6,7 +6,9 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.content.res.AssetFileDescriptor;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.media.ToneGenerator;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,9 +16,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 import android.text.Layout;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
@@ -44,6 +43,9 @@ import com.qalun.checker.core.RecitationTracker;
 import com.qalun.checker.core.RecitationTracker.Mistake;
 import com.qalun.checker.core.RecitationTracker.State;
 import com.qalun.checker.core.RecitationTracker.Word;
+import com.qalun.checker.speech.GoogleSpeechSource;
+import com.qalun.checker.speech.SpeechSource;
+import com.qalun.checker.speech.WhisperSpeechSource;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -73,12 +75,9 @@ public class ReciteActivity extends Activity {
     private TextView quranView, statusView, bannerView;
     private Button micButton;
 
-    private SpeechRecognizer recognizer;
     private boolean listening;
-    private String lastPartial = "";
     private int committedPos = 0;
     private int shownPos = 0;
-    private int networkRetries = 0;
 
     private boolean hideMode = false;
     private boolean soundAlert = true;
@@ -94,6 +93,7 @@ public class ReciteActivity extends Activity {
         setTitle(number + ". " + sura.nameEn);
 
         tracker = new RecitationTracker(text.ayat(number));
+        useOffline = getSharedPreferences("settings", MODE_PRIVATE).getBoolean("offline", true);
         buildUi();
         renderText(text.ayat(number));
         refreshWords(0, tracker.words().size());
@@ -310,11 +310,10 @@ public class ReciteActivity extends Activity {
 
     private void restartAt(int idx) {
         boolean wasListening = listening;
-        if (wasListening) stopListening();
+        if (wasListening) stopListening(false);
         tracker.restartAt(idx);
         committedPos = idx;
         shownPos = idx;
-        lastPartial = "";
         refreshWords(idx, tracker.words().size());
         updateStatus();
         bannerView.setVisibility(View.GONE);
@@ -354,128 +353,70 @@ public class ReciteActivity extends Activity {
 
     // ---------------------------------------------------------- speech input
 
+    private SpeechSource source;
+    private boolean useOffline = true;
+    private MediaPlayer hasbuk;
+
+    private final SpeechSource.Listener speechListener = new SpeechSource.Listener() {
+        @Override public void onPartial(String text) { if (tracker != null) applyResult(text, false); }
+        @Override public void onFinal(String text) { if (tracker != null && text != null && !text.trim().isEmpty()) applyResult(text, true); }
+        @Override public void onStatus(String status) {
+            if (status.isEmpty()) updateStatus();
+            else statusView.setText(status);
+        }
+        @Override public void onError(String message) {
+            Toast.makeText(ReciteActivity.this, message, Toast.LENGTH_LONG).show();
+            stopListening(false);
+        }
+    };
+
     private void startListening() {
         if (Build.VERSION.SDK_INT >= 23
                 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
             return;
         }
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+        boolean offline = useOffline && WhisperSpeechSource.available(this);
+        if (!offline && !GoogleSpeechSource.available(this)) {
             new AlertDialog.Builder(this)
                     .setTitle("التعرّف على الكلام غير متوفر")
-                    .setMessage("ثبّت تطبيق Google (أو «خدمات التعرّف على الكلام من Google») وفعّل اللغة العربية، ثم حاول مجدداً.")
+                    .setMessage("ثبّت تطبيق Google وفعّل العربية، أو استخدم النموذج القرآني (بدون إنترنت).")
                     .setPositiveButton("حسناً", null)
                     .show();
             return;
         }
+        if (useOffline && !offline)
+            Toast.makeText(this, "النموذج القرآني غير موجود في هذه النسخة — سيُستخدم Google", Toast.LENGTH_LONG).show();
         if (tracker.finished()) restartAt(0);
+        source = offline ? new WhisperSpeechSource(this, speechListener) : new GoogleSpeechSource(this, speechListener);
         listening = true;
-        networkRetries = 0;
         updateMicButton();
-        listenOnce();
+        source.start();
     }
 
-    private void stopListening() {
+    /** @param sayHasbuk play the teacher's «حسبك» (when the reciter stops or finishes) */
+    private void stopListening(boolean sayHasbuk) {
+        boolean was = listening;
         listening = false;
-        handler.removeCallbacksAndMessages(null);
-        if (recognizer != null) {
-            recognizer.cancel();
-            recognizer.destroy();
-            recognizer = null;
-        }
-        if (!lastPartial.isEmpty()) { String p = lastPartial; lastPartial = ""; applyResult(p, true); }
+        if (source != null) { source.stop(); source = null; }
         updateMicButton();
+        if (was && sayHasbuk) playHasbuk();
     }
 
-    private void listenOnce() {
-        if (!listening) return;
-        if (recognizer == null) {
-            recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-            recognizer.setRecognitionListener(listener);
-        }
-        Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA");
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-SA");
-        i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-        i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
-        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L);
-        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L);
-        lastPartial = "";
-        recognizer.startListening(i);
+    private void stopListening() { stopListening(true); }
+
+    private void playHasbuk() {
+        try {
+            if (hasbuk != null) hasbuk.release();
+            hasbuk = new MediaPlayer();
+            AssetFileDescriptor fd = getAssets().openFd("sounds/hasbuk.m4a");
+            hasbuk.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+            fd.close();
+            hasbuk.setOnCompletionListener(MediaPlayer::release);
+            hasbuk.prepare();
+            hasbuk.start();
+        } catch (Exception ignored) { }
     }
-
-    private void listenAgain(long delayMs) {
-        if (!listening) return;
-        handler.postDelayed(this::listenOnce, delayMs);
-    }
-
-    private static String first(Bundle b) {
-        if (b == null) return null;
-        ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        return (r == null || r.isEmpty()) ? null : r.get(0);
-    }
-
-    private final RecognitionListener listener = new RecognitionListener() {
-        @Override public void onReadyForSpeech(Bundle params) { }
-        @Override public void onBeginningOfSpeech() { }
-        @Override public void onRmsChanged(float rmsdB) { }
-        @Override public void onBufferReceived(byte[] buffer) { }
-        @Override public void onEndOfSpeech() { }
-        @Override public void onEvent(int eventType, Bundle params) { }
-
-        @Override
-        public void onPartialResults(Bundle partial) {
-            String t = first(partial);
-            if (t == null || t.trim().isEmpty()) return;
-            lastPartial = t;
-            applyResult(t, false);
-        }
-
-        @Override
-        public void onResults(Bundle results) {
-            String t = first(results);
-            if (t == null || t.trim().isEmpty()) t = lastPartial;
-            lastPartial = "";
-            networkRetries = 0;
-            if (t != null && !t.trim().isEmpty()) applyResult(t, true);
-            listenAgain(50);
-        }
-
-        @Override
-        public void onError(int error) {
-            // keep what was already heard in this utterance
-            if (!lastPartial.isEmpty()) { String p = lastPartial; lastPartial = ""; applyResult(p, true); }
-            if (!listening) return;
-            switch (error) {
-                case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
-                    stopListening();
-                    Toast.makeText(ReciteActivity.this, "يلزم إذن الميكروفون", Toast.LENGTH_LONG).show();
-                    break;
-                case SpeechRecognizer.ERROR_NETWORK:
-                case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
-                case SpeechRecognizer.ERROR_SERVER:
-                    if (++networkRetries > 3) {
-                        stopListening();
-                        Toast.makeText(ReciteActivity.this, "تحقق من اتصال الإنترنت", Toast.LENGTH_LONG).show();
-                    } else listenAgain(1500);
-                    break;
-                case 12: // ERROR_LANGUAGE_NOT_SUPPORTED (API 31)
-                case 13: // ERROR_LANGUAGE_UNAVAILABLE (API 31)
-                    stopListening();
-                    Toast.makeText(ReciteActivity.this, "العربية غير متوفرة في خدمة التعرّف على الكلام على هذا الجهاز", Toast.LENGTH_LONG).show();
-                    break;
-                case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
-                case SpeechRecognizer.ERROR_CLIENT:
-                    if (recognizer != null) { recognizer.destroy(); recognizer = null; }
-                    listenAgain(400);
-                    break;
-                default: // no match / speech timeout: just keep listening
-                    listenAgain(100);
-            }
-        }
-    };
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
@@ -489,14 +430,15 @@ public class ReciteActivity extends Activity {
 
     // ------------------------------------------------------------------ menu
 
-    private static final int M_MISTAKES = 1, M_HIDE = 2, M_RESTART = 3, M_SOUND = 4;
+    private static final int M_MISTAKES = 1, M_HIDE = 2, M_RESTART = 3, M_SOUND = 4, M_ENGINE = 5;
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         menu.add(0, M_MISTAKES, 0, "قائمة الأخطاء").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
         menu.add(0, M_HIDE, 1, "إخفاء النص (اختبار الحفظ)").setCheckable(true).setChecked(hideMode);
         menu.add(0, M_SOUND, 2, "صوت عند الخطأ").setCheckable(true).setChecked(soundAlert);
-        menu.add(0, M_RESTART, 3, "البدء من أول السورة");
+        menu.add(0, M_ENGINE, 3, "الاستماع بالنموذج القرآني (بدون إنترنت)").setCheckable(true).setChecked(useOffline);
+        menu.add(0, M_RESTART, 4, "البدء من أول السورة");
         return true;
     }
 
@@ -513,6 +455,13 @@ public class ReciteActivity extends Activity {
                 soundAlert = !soundAlert;
                 item.setChecked(soundAlert);
                 return true;
+            case M_ENGINE:
+                useOffline = !useOffline;
+                item.setChecked(useOffline);
+                getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("offline", useOffline).apply();
+                if (listening) { stopListening(false); startListening(); }
+                Toast.makeText(this, useOffline ? "النموذج القرآني على الجهاز" : "Google (يحتاج إنترنت)", Toast.LENGTH_SHORT).show();
+                return true;
             case M_RESTART: restartAt(0); return true;
             default: return super.onOptionsItemSelected(item);
         }
@@ -521,13 +470,14 @@ public class ReciteActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
-        if (listening) stopListening();
+        if (listening) stopListening(false);
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (recognizer != null) { recognizer.destroy(); recognizer = null; }
+        if (source != null) { source.destroy(); source = null; }
+        if (hasbuk != null) { hasbuk.release(); hasbuk = null; }
         if (tone != null) { tone.release(); tone = null; }
     }
 }

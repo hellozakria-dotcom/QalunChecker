@@ -6,3 +6,9 @@ local.properties
 tests/kfgqpc/
 tests/fixtures/
 tests/out/
+tests/__pycache__/
+model/
+model_export/
+testaudio/
+e2e/
+ort.jar

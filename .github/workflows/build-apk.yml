@@ -4,6 +4,10 @@ on:
   push:
   workflow_dispatch:
 
+env:
+  MODEL_ID: tarteel-ai/whisper-tiny-ar-quran
+  ORT_VERSION: 1.20.0
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,12 +19,53 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache converted model
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model
+          key: model-${{ env.MODEL_ID }}-${{ hashFiles('ci/prepare_model.py') }}
+
+      - name: Install Python tools
+        run: |
+          pip install -q torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install -q "numpy<2" transformers==4.46.3 "optimum[exporters]==1.23.3" onnx==1.17.0 onnxruntime==1.20.1
+
+      - name: Convert Quran speech model to ONNX
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: python ci/prepare_model.py "$MODEL_ID" model
+
+      - name: Test on real Qalun recitation
+        continue-on-error: true
+        run: |
+          python ci/get_test_audio.py testaudio
+          python ci/reference.py "$MODEL_ID" testaudio/list.tsv testaudio/ref.tsv
+          curl -sfL -o ort.jar "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime/$ORT_VERSION/onnxruntime-$ORT_VERSION.jar"
+          mkdir -p e2e
+          javac -encoding UTF-8 -cp ort.jar -d e2e $(find app/src/main/java/com/qalun/checker/core -name '*.java') ci/E2ETest.java
+          for v in int8 fp32; do
+            java -cp ort.jar:e2e E2ETest model/$v testaudio/list.tsv testaudio/ref.tsv app/src/main/assets $v \
+              || echo "::warning title=E2E $v::Java engine test failed"
+          done
+
+      - name: Package model into the app
+        run: |
+          mkdir -p app/src/main/assets/whisper
+          cp model/int8/* app/src/main/assets/whisper/
+          ls -la app/src/main/assets/whisper
+
       - name: Build
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
+          ls -la app/build/outputs/apk/debug/
+          echo "::notice title=APK size::$(du -h app/build/outputs/apk/debug/app-debug.apk | cut -f1)"
 
       - uses: actions/upload-artifact@v4
         with:
