@@ -13,6 +13,7 @@ public class E2ETest {
         WhisperEngine eng = new WhisperEngine(model, 2);
         System.out.println("load ms=" + (System.nanoTime() - t0) / 1000000);
         Map<Integer, RecitationTracker> trackers = new LinkedHashMap<>();
+        Map<Integer, StringBuilder> flagged = new LinkedHashMap<>(), heardAll = new LinkedHashMap<>();
         int same = 0, total = 0; double audioSec = 0, procSec = 0;
         for (String l : Files.readAllLines(Paths.get(listing))) {
             if (l.isBlank()) continue;
@@ -28,7 +29,11 @@ public class E2ETest {
             if (r.equals(text)) same++;
             System.out.printf("%s %.1fs audio, %.2fs | java: %s%n   ref: %s%n", f[1], audio.length / 16000.0, sec, text, r);
             RecitationTracker t = trackers.computeIfAbsent(sura, k -> new RecitationTracker(q.ayat(k)));
-            for (RecitationTracker.Mistake m : t.onResult(text, true)) System.out.println("   flagged: " + m.describe().replace('\n', ' '));
+            for (RecitationTracker.Mistake m : t.onResult(text, true)) {
+                System.out.println("   flagged: " + m.describe().replace('\n', ' '));
+                flagged.computeIfAbsent(sura, k -> new StringBuilder()).append(m.word.display).append(m.type == RecitationTracker.State.MISSED ? "(missed)" : "(heard " + m.word.heard + ")").append(" ");
+            }
+            heardAll.computeIfAbsent(sura, k -> new StringBuilder()).append(text).append(" / ");
         }
         StringBuilder sum = new StringBuilder();
         for (Map.Entry<Integer, RecitationTracker> e : trackers.entrySet()) {
@@ -41,5 +46,8 @@ public class E2ETest {
                 label, same, total, procSec / Math.max(audioSec, 1e-9), sum);
         System.out.println(msg);
         System.out.println("::notice title=E2E " + label + "::" + msg);
+        if (label.equals(System.getenv().getOrDefault("DETAIL_VARIANT", "mixed")))
+            for (int sura : heardAll.keySet())
+                System.out.println("::notice title=S" + sura + " " + label + "::heard: " + heardAll.get(sura) + " %0Aflagged: " + flagged.getOrDefault(sura, new StringBuilder("none")));
     }
 }

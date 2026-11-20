@@ -19,6 +19,7 @@ print("model files:", sorted(os.listdir(local)))
 model_id = local
 main_export(model_id, output=tmp, task="automatic-speech-recognition", no_post_process=True)
 print("exported:", os.listdir(tmp))
+VARIANTS = ("fp32", "int8", "mixed")
 for variant in ("fp32", "int8"):
     d = os.path.join(out, variant); os.makedirs(d, exist_ok=True)
     for part in ("encoder", "decoder"):
@@ -29,6 +30,11 @@ for variant in ("fp32", "int8"):
             if os.path.exists(src + "_data"): shutil.copy(src + "_data", dst + "_data")
         else:
             quantize_dynamic(src, dst, weight_type=QuantType.QUInt8, op_types_to_quantize=["MatMul", "Gather"])
+
+# mixed: full-precision encoder (the "ear"), compressed decoder
+os.makedirs(os.path.join(out, "mixed"), exist_ok=True)
+shutil.copy(os.path.join(out, "fp32", "encoder.onnx"), os.path.join(out, "mixed", "encoder.onnx"))
+shutil.copy(os.path.join(out, "int8", "decoder.onnx"), os.path.join(out, "mixed", "decoder.onnx"))
 
 tok = WhisperTokenizer.from_pretrained(model_id)
 vocab = tok.get_vocab()
@@ -45,7 +51,7 @@ try:
 except Exception as e:
     print("no generation config:", e)
 print(props)
-for variant in ("fp32", "int8"):
+for variant in VARIANTS:
     d = os.path.join(out, variant)
     with open(os.path.join(d, "tokens.txt"), "w", encoding="utf-8") as f:
         for i in range(max(inv) + 1):
