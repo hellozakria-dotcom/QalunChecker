@@ -30,7 +30,7 @@ public final class WhisperEngine implements AutoCloseable {
     private final OrtSession encoder, decoder;
     private final String encIn, decIds, decHidden;
     private final java.util.List<String> pastInputs = new ArrayList<>();
-    private String useCacheInput;
+    private String useCacheInput, cachePosInput;
     private final int heads, headDim;
     private final MelSpectrogram mel;
     private final WhisperTokenizer tokenizer;
@@ -74,6 +74,7 @@ public final class WhisperEngine implements AutoCloseable {
             else if (n.contains("encoder_hidden")) hid = n;
             else if (n.startsWith("past_key_values")) pastInputs.add(n);
             else if (n.contains("use_cache")) useCacheInput = n;
+            else if (n.contains("cache_position")) cachePosInput = n;
         }
         if (ids == null || hid == null) throw new IllegalStateException("unexpected decoder inputs: " + decoder.getInputNames());
         decIds = ids;
@@ -94,6 +95,7 @@ public final class WhisperEngine implements AutoCloseable {
             for (String n : pastInputs) past.put(n, empty);
             OrtSession.Result prev = null;
             long[] ids = prompt.clone();
+            long position = 0; // index of ids[0] in the whole token sequence
             try {
                 for (int step = 0; step < MAX_TOKENS; step++) {
                     Map<String, OnnxTensor> inputs = new HashMap<>(past);
@@ -103,9 +105,18 @@ public final class WhisperEngine implements AutoCloseable {
                     inputs.put(decIds, idsT);
                     inputs.put(decHidden, hidden);
                     if (useCache != null) inputs.put(useCacheInput, useCache);
+                    OnnxTensor cachePos = null;
+                    if (cachePosInput != null) {
+                        long[] pos = new long[ids.length];
+                        for (int k = 0; k < pos.length; k++) pos[k] = position + k;
+                        cachePos = OnnxTensor.createTensor(env, LongBuffer.wrap(pos), new long[]{pos.length});
+                        inputs.put(cachePosInput, cachePos);
+                    }
+                    position += ids.length;
                     OrtSession.Result r = decoder.run(inputs);
                     idsT.close();
                     if (useCache != null) useCache.close();
+                    if (cachePos != null) cachePos.close();
                     if (prev != null) prev.close(); // its tensors were this step's past
                     prev = r;
 
