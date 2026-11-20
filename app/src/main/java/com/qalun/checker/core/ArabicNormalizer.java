@@ -41,7 +41,11 @@ public final class ArabicNormalizer {
 
     public static String normalize(String word) {
         if (word == null) return "";
-        String w = word.replace('ے', 'ي').replace("وٰ", "");
+        // a waw or ya carrying a small alif directly is read as alif (صلوة، لنريٰك): drop it
+        // (at the end of a word ىٰ/يٰ stays a ya, as in على / موسى)
+        String w = word.replace("و\u0670", "")
+                .replaceAll("[يى]\u0670(?=[\u0621-\u064A])", "")
+                .replace('\u06D2', 'ي');
         StringBuilder kept = new StringBuilder(w.length());
         for (int i = 0; i < w.length(); i++) {
             char c = w.charAt(i);

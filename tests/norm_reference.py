@@ -3,7 +3,7 @@ DROP=set(range(0x64B,0x653))|{0x653,0x654,0x655,0x656,0x657,0x658,0x65E,0x640,0x
 MAP={'أ':'','إ':'','آ':'','ٱ':'','ة':'ت','ؤ':'','ئ':'','ء':'','ے':'ي','ۧ':'ي','ا':''}
 def norm(w):
     w=w.replace('ے','ي')
-    w=w.replace('وٰ','')  # waw written in place of alif
+    w=re.sub('[يى]\u0670(?=[\u0621-\u064A])','',w.replace('و\u0670',''))  # waw written in place of alif
     s=[]
     for ch in w:
         o=ord(ch)

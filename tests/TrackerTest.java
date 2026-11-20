@@ -9,6 +9,7 @@ public class TrackerTest {
     static void check(boolean ok, String msg) { if (!ok) { fails++; System.out.println("FAIL: " + msg); } }
 
     static String plain(String raw) { // what a speech engine might print: letters only, no marks
+        raw = raw.replaceAll("[يى]\u0670(?=[\u0621-\u064A])", "ا");
         StringBuilder sb = new StringBuilder();
         for (char c : raw.toCharArray()) {
             if (c >= 0x0621 && c <= 0x064A && c != 0x0640) sb.append(c);
@@ -123,6 +124,11 @@ public class TrackerTest {
         RecitationTracker k = new RecitationTracker(q.ayat(19));
         m = k.onResult("كاف ها يا عين صاد ذكر رحمة ربك", true);
         check(m.isEmpty(), "kaf-ha-ya-ain-sad: " + (m.isEmpty() ? "" : m.get(0).describe()));
+
+        String[][] same = {{"لَنَرَيٰكَ", "لنراك"}, {"نَرَيٰكَ", "نراك"}, {"اَ۬لصَّلَوٰةَ", "الصلاة"}, {"عَلَيٰ", "على"}};
+        for (String[] p : same)
+            check(ArabicNormalizer.normalize(p[0]).equals(ArabicNormalizer.normalize(p[1])),
+                    "should match: " + p[0] + " / " + p[1] + " -> " + ArabicNormalizer.normalize(p[0]) + " vs " + ArabicNormalizer.normalize(p[1]));
 
         System.out.println(fails == 0 ? "ALL CHECKS PASSED" : fails + " CHECK(S) FAILED");
         System.exit(fails == 0 ? 0 : 1);
