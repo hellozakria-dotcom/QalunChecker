@@ -26,8 +26,25 @@ green, red or orange as you go, and the phone vibrates and beeps when you make a
 
 With Android Studio: *File → Open* this folder, then press **Run**.
 
-**Phone requirements:** Android 7+, the Google app or "Speech Recognition & Synthesis
-by Google" (preinstalled on most phones), and an internet connection.
+**Phone requirements:** Android 7+ (64- or 32-bit ARM). The default listening engine is
+an offline Quran-trained model on the phone: no internet, no limits. Google's
+recogniser (needs internet) can be chosen in the menu instead.
+
+## Listening engine (offline)
+
+Tarteel's open `whisper-tiny-ar-quran` (Apache-2.0), converted to ONNX in CI
+(`ci/prepare_model.py`): full-precision encoder plus 8-bit decoder, about 80 MB.
+The app records the microphone, cuts at pauses (≥0.7 s), and transcribes each piece.
+While you're still reciting a piece, it re-checks every 2.5 s so words light up.
+
+Real-recitation test in CI (Sheikh Ahmad Attarabolsi, Qalun; surahs 1, 108, 112–114; 93 words):
+
+| Model | Size | Correct words marked correct | Java = Python output |
+|---|---|---|---|
+| full precision | 221 MB | 93/93 | 24/24 pieces |
+| shipped (mixed) | 80 MB | 90/93 | 21/24 pieces |
+
+When you stop or finish a surah, the app plays a recorded «حسبك».
 
 ## How it works
 

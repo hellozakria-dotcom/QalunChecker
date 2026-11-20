@@ -7,7 +7,7 @@ on:
 env:
   MODEL_ID: tarteel-ai/whisper-tiny-ar-quran
   ORT_VERSION: 1.20.0
-  MODEL_VARIANT: mixedpc
+  MODEL_VARIANT: mixed
 
 jobs:
   build:
@@ -52,7 +52,7 @@ jobs:
           curl -sfL -o ort.jar "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime/$ORT_VERSION/onnxruntime-$ORT_VERSION.jar"
           mkdir -p e2e
           javac -encoding UTF-8 -cp ort.jar -d e2e $(find app/src/main/java/com/qalun/checker/core -name '*.java') ci/E2ETest.java
-          for v in fp32 mixedpc mixed; do
+          for v in fp32 mixed; do
             java -cp ort.jar:e2e E2ETest model/$v testaudio/list.tsv testaudio/ref.tsv app/src/main/assets $v \
               || echo "::warning title=E2E $v::Java engine test failed"
           done
@@ -62,7 +62,7 @@ jobs:
           mkdir -p app/src/main/assets/whisper
           cp model/$MODEL_VARIANT/* app/src/main/assets/whisper/
           ls -la app/src/main/assets/whisper
-          for v in fp32 mixedpc mixed; do echo "::notice title=size $v::$(du -sh model/$v | cut -f1)"; done
+          for v in fp32 mixed; do echo "::notice title=size $v::$(du -sh model/$v | cut -f1)"; done
           echo "::notice title=model files ($MODEL_VARIANT)::$(cd model/$MODEL_VARIANT && ls -l | awk 'NR>1{printf "%s=%dKB ", $9, $5/1024}')"
 
       - name: Build
