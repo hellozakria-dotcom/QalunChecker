@@ -19,7 +19,7 @@ print("model files:", sorted(os.listdir(local)))
 model_id = local
 main_export(model_id, output=tmp, task="automatic-speech-recognition", no_post_process=True)
 print("exported:", os.listdir(tmp))
-VARIANTS = ("fp32", "int8", "mixed")
+VARIANTS = ("fp32", "int8", "mixed", "mixedpc")
 for variant in ("fp32", "int8"):
     d = os.path.join(out, variant); os.makedirs(d, exist_ok=True)
     for part in ("encoder", "decoder"):
@@ -35,6 +35,12 @@ for variant in ("fp32", "int8"):
 os.makedirs(os.path.join(out, "mixed"), exist_ok=True)
 shutil.copy(os.path.join(out, "fp32", "encoder.onnx"), os.path.join(out, "mixed", "encoder.onnx"))
 shutil.copy(os.path.join(out, "int8", "decoder.onnx"), os.path.join(out, "mixed", "decoder.onnx"))
+
+# mixedpc: full-precision encoder, decoder compressed per channel (finer, more accurate)
+os.makedirs(os.path.join(out, "mixedpc"), exist_ok=True)
+shutil.copy(os.path.join(out, "fp32", "encoder.onnx"), os.path.join(out, "mixedpc", "encoder.onnx"))
+quantize_dynamic(os.path.join(tmp, "decoder_model.onnx"), os.path.join(out, "mixedpc", "decoder.onnx"),
+                 weight_type=QuantType.QUInt8, per_channel=True, op_types_to_quantize=["MatMul"])
 
 tok = WhisperTokenizer.from_pretrained(model_id)
 vocab = tok.get_vocab()

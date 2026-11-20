@@ -46,7 +46,7 @@ public class E2ETest {
                 label, same, total, procSec / Math.max(audioSec, 1e-9), sum);
         System.out.println(msg);
         System.out.println("::notice title=E2E " + label + "::" + msg);
-        if (label.equals(System.getenv().getOrDefault("DETAIL_VARIANT", "mixed")))
+        if (label.equals(System.getenv().getOrDefault("DETAIL_VARIANT", "mixedpc")))
             for (int sura : heardAll.keySet())
                 System.out.println("::notice title=S" + sura + " " + label + "::heard: " + heardAll.get(sura) + " %0Aflagged: " + flagged.getOrDefault(sura, new StringBuilder("none")));
     }
