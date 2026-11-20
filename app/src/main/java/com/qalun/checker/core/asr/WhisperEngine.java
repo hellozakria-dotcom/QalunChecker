@@ -91,7 +91,8 @@ public final class WhisperEngine implements AutoCloseable {
             // KV cache: each step feeds only the newest token plus the attention memory of the
             // previous steps, instead of re-reading the whole sentence.
             Map<String, OnnxTensor> past = new HashMap<>();
-            OnnxTensor empty = OnnxTensor.createTensor(env, FloatBuffer.allocate(0), new long[]{1, heads, 0, headDim});
+            // first step runs the no-cache branch; it still needs well-formed placeholder memory
+            OnnxTensor empty = OnnxTensor.createTensor(env, FloatBuffer.allocate(heads * headDim), new long[]{1, heads, 1, headDim});
             for (String n : pastInputs) past.put(n, empty);
             OrtSession.Result prev = null;
             long[] ids = prompt.clone();

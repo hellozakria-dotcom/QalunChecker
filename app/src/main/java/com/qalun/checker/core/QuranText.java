@@ -30,6 +30,7 @@ public final class QuranText {
     }
 
     private final Map<Integer, List<Ayah>> bySura = new HashMap<>();
+    private final List<Ayah> all = new ArrayList<>();
     private final List<Sura> suras = new ArrayList<>();
 
     public static QuranText load(InputStream ayat, InputStream suraList) throws IOException {
@@ -42,7 +43,9 @@ public final class QuranText {
                 int s = Integer.parseInt(f[0].trim());
                 List<Ayah> list = q.bySura.get(s);
                 if (list == null) { list = new ArrayList<>(); q.bySura.put(s, list); }
-                list.add(new Ayah(s, Integer.parseInt(f[1].trim()), f[2], f[3]));
+                Ayah a = new Ayah(s, Integer.parseInt(f[1].trim()), f[2], f[3]);
+                list.add(a);
+                q.all.add(a);
             }
         }
         try (BufferedReader r = new BufferedReader(new InputStreamReader(suraList, StandardCharsets.UTF_8))) {
@@ -57,6 +60,13 @@ public final class QuranText {
     }
 
     public List<Sura> suras() { return suras; }
+
+    /** Every ayah of the mushaf in order. */
+    public List<Ayah> all() { return all; }
+
+    public static int pageOf(Ayah a) {
+        try { return Integer.parseInt(a.page.trim()); } catch (NumberFormatException e) { return 1; }
+    }
 
     public List<Ayah> ayat(int sura) {
         List<Ayah> l = bySura.get(sura);
