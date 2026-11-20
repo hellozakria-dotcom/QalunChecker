@@ -110,7 +110,11 @@ public final class WhisperEngine implements AutoCloseable {
                 if (next == eot) break;
                 out.add(next);
                 seq.add((long) next);
-                if (looping(out)) break;
+                int rep = repeatedTail(out);
+                if (rep > 0) { // model got stuck repeating itself: drop the repeats and stop
+                    out.subList(out.size() - rep, out.size()).clear();
+                    break;
+                }
             }
             return tokenizer.decode(out);
         }
@@ -123,15 +127,22 @@ public final class WhisperEngine implements AutoCloseable {
         }
     }
 
-    /** Stop runaway repetition (same 4-token block repeated 3 times). */
-    private static boolean looping(List<Integer> t) {
-        int n = t.size(), k = 4;
-        if (n < 3 * k) return false;
-        for (int i = 0; i < k; i++) {
-            int a = t.get(n - 1 - i);
-            if (a != t.get(n - 1 - i - k) || a != t.get(n - 1 - i - 2 * k)) return false;
+    /**
+     * If the output ends with a block of 1..8 tokens repeated (4 times for single tokens,
+     * 3 times otherwise), returns how many trailing tokens are repeats to drop; else 0.
+     */
+    static int repeatedTail(List<Integer> t) {
+        int n = t.size();
+        for (int k = 1; k <= 8; k++) {
+            int times = k == 1 ? 4 : 3;
+            if (n < times * k) continue;
+            boolean rep = true;
+            for (int r = 1; r < times && rep; r++)
+                for (int i = 0; i < k && rep; i++)
+                    if (!t.get(n - 1 - i).equals(t.get(n - 1 - i - r * k))) rep = false;
+            if (rep) return (times - 1) * k;
         }
-        return true;
+        return 0;
     }
 
     private static Map<String, OnnxTensor> singleton(String k, OnnxTensor v) {

@@ -14,18 +14,21 @@ def find(sura):
         if m and int(m.group(1)) == sura: return n
     return None
 
-def chunks(audio, sr=16000, maxlen=25.0):
-    fl = int(0.03 * sr)
-    rms = np.sqrt(np.convolve(audio ** 2, np.ones(fl) / fl, mode="same"))
-    quiet = rms < max(0.01, 0.15 * np.percentile(rms, 90))
-    res, start = [], 0
-    while start < len(audio):
-        end = min(len(audio), start + int(maxlen * sr))
-        if end < len(audio):
-            lo = start + int(5 * sr)
-            cand = np.where(quiet[lo:end])[0]
-            if len(cand): end = lo + cand[-1]
-        res.append(audio[start:end]); start = end
+def chunks(audio, sr=16000, maxlen=24.0, pause=0.6):
+    """Cut at every pause of >= 0.6 s, like the app does (pieces of 1-24 s)."""
+    fl = int(0.1 * sr)
+    n = len(audio) // fl
+    rms = np.sqrt((audio[: n * fl].reshape(n, fl) ** 2).mean(axis=1))
+    thr = max(0.008, 0.12 * np.percentile(rms, 90))
+    res, start, quiet_run = [], 0, 0
+    for k in range(n):
+        quiet_run = quiet_run + 1 if rms[k] < thr else 0
+        end = (k + 1) * fl
+        seg = (end - start) / sr
+        if (quiet_run * 0.1 >= pause and seg > 1.5) or seg >= maxlen:
+            if np.max(rms[start // fl: k + 1]) > thr: res.append(audio[start:end])
+            start, quiet_run = end, 0
+    if len(audio) - start > sr // 2 and np.max(rms[start // fl:]) > thr: res.append(audio[start:])
     return res
 
 listing = []

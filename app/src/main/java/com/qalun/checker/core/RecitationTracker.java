@@ -201,7 +201,7 @@ public final class RecitationTracker {
     //   unrelated token instead of the word                         1.2
     //   extra token                                                 1.0
     //   word skipped                          1.0 (+0.3 per further word in a row)
-    private static final byte OP_MATCH = 1, OP_MERGE2 = 2, OP_SUB = 3, OP_INS = 4, OP_DEL = 5, OP_PHRASE = 6;
+    private static final byte OP_MATCH = 1, OP_MERGE2 = 2, OP_SUB = 3, OP_INS = 4, OP_DEL = 5, OP_PHRASE = 6, OP_REGROUP = 7;
 
     /** Aligns tokens from word index `from`; marks word states; returns number of words consumed. */
     private int align(List<String> tokens, int from) {
@@ -230,6 +230,10 @@ public final class RecitationTracker {
                         if (j + 1 < m && tok.equals(ArabicNormalizer.collapse(
                                 words.get(from + j).norm + words.get(from + j + 1).norm)))
                             relax(d, op, len, i + 1, j + 2, cur, OP_MERGE2, 1);
+                        // same letters split differently over two words (فصلل ربك = فصل لربك)
+                        if (i + 1 < n && j + 1 < m && (tok + tokens.get(i + 1)).equals(
+                                words.get(from + j).norm + words.get(from + j + 1).norm))
+                            relax(d, op, len, i + 2, j + 2, cur + 0.1, OP_REGROUP, 2);
                         double sim = ArabicNormalizer.similarity(tok, words.get(from + j).norm);
                         double cost = sim >= 0.5 ? 0.75 + 0.5 * (1 - sim) : 1.2;
                         relax(d, op, len, i + 1, j + 1, cur + cost, OP_SUB, 1);
@@ -246,6 +250,7 @@ public final class RecitationTracker {
             int l = len[i][j];
             switch (o) {
                 case OP_MATCH: mark(from + j - 1, State.CORRECT, null); i -= l; j -= 1; break;
+                case OP_REGROUP: mark(from + j - 1, State.CORRECT, null); mark(from + j - 2, State.CORRECT, null); i -= 2; j -= 2; break;
                 case OP_MERGE2: mark(from + j - 1, State.CORRECT, null); mark(from + j - 2, State.CORRECT, null); i -= 1; j -= 2; break;
                 case OP_SUB: {
                     String tok = tokens.get(i - 1);

@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class WhisperSpeechSource implements SpeechSource {
     private static final int SR = 16000, CHUNK = 1600; // 100 ms
-    private static final int END_SILENCE_MS = 900, PREROLL_MS = 300;
+    private static final int END_SILENCE_MS = 700, PREROLL_MS = 300;
     private static final double MAX_SEGMENT_S = 24.0, PARTIAL_EVERY_MS = 2500;
 
     private static WhisperEngine engine; // shared, loaded once per process

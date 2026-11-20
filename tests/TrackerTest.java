@@ -10,6 +10,7 @@ public class TrackerTest {
 
     static String plain(String raw) { // what a speech engine might print: letters only, no marks
         raw = raw.replaceAll("[يى]\u0670(?=[\u0621-\u064A])", "ا");
+        raw = raw.replaceAll("[\u064A\u0649\u06D2\u0648\u0627]\u0654", "ئ");
         StringBuilder sb = new StringBuilder();
         for (char c : raw.toCharArray()) {
             if (c >= 0x0621 && c <= 0x064A && c != 0x0640) sb.append(c);
@@ -125,7 +126,7 @@ public class TrackerTest {
         m = k.onResult("كاف ها يا عين صاد ذكر رحمة ربك", true);
         check(m.isEmpty(), "kaf-ha-ya-ain-sad: " + (m.isEmpty() ? "" : m.get(0).describe()));
 
-        String[][] same = {{"لَنَرَيٰكَ", "لنراك"}, {"نَرَيٰكَ", "نراك"}, {"اَ۬لصَّلَوٰةَ", "الصلاة"}, {"عَلَيٰ", "على"}};
+        String[][] same = {{"لَنَرَيٰكَ", "لنراك"}, {"نَرَيٰكَ", "نراك"}, {"اَ۬لصَّلَوٰةَ", "الصلاة"}, {"عَلَيٰ", "على"}, {"شَانِئَكَ", "شانئك"}};
         for (String[] p : same)
             check(ArabicNormalizer.normalize(p[0]).equals(ArabicNormalizer.normalize(p[1])),
                     "should match: " + p[0] + " / " + p[1] + " -> " + ArabicNormalizer.normalize(p[0]) + " vs " + ArabicNormalizer.normalize(p[1]));

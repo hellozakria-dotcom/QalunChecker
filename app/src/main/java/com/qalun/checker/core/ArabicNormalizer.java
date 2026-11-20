@@ -45,6 +45,8 @@ public final class ArabicNormalizer {
         // (at the end of a word ىٰ/يٰ stays a ya, as in على / موسى)
         String w = word.replace("و\u0670", "")
                 .replaceAll("[يى]\u0670(?=[\u0621-\u064A])", "")
+                // a ya/waw/alif carrying a separate small hamza is only a hamza seat (شانئك = شانئك)
+                .replaceAll("[\u064A\u0649\u06D2\u0648\u0627]\u0654", "")
                 .replace('\u06D2', 'ي');
         StringBuilder kept = new StringBuilder(w.length());
         for (int i = 0; i < w.length(); i++) {
