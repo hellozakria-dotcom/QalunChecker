@@ -35,7 +35,8 @@ jobs:
       - name: Install Python tools
         run: |
           pip install -q torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
-          pip install -q "numpy<2" transformers==4.46.3 "optimum[exporters]==1.23.3" onnx==1.17.0 onnxruntime==1.20.1
+          pip install -q --extra-index-url https://download.pytorch.org/whl/cpu torch==2.5.1 "numpy<2" transformers==4.46.3 "optimum[exporters]==1.23.3" onnx==1.17.0 onnxruntime==1.20.1
+          python -c "import torch, transformers, optimum; print('torch', torch.__version__, 'transformers', transformers.__version__)"
 
       - name: Convert Quran speech model to ONNX
         if: steps.model-cache.outputs.cache-hit != 'true'
