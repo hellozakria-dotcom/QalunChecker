@@ -213,13 +213,16 @@ public class ReciteActivity extends Activity {
             Word w = words.get(i);
             List<Object> spans = new ArrayList<>();
             int fg;
-            switch (w.state) {
+            // while a phrase is still being recited, only show progress (green): the model's
+            // guesses change as it hears more, so mistakes are shown once the phrase is final
+            State shown = (i >= committedPos && w.state != State.CORRECT) ? State.PENDING : w.state;
+            switch (shown) {
                 case CORRECT: fg = C_CORRECT; break;
                 case WRONG: fg = C_WRONG; spans.add(new BackgroundColorSpan(C_WRONG_BG)); break;
                 case MISSED: fg = C_MISSED; spans.add(new BackgroundColorSpan(C_MISSED_BG)); spans.add(new StrikethroughSpan()); break;
                 default: fg = hideMode ? Color.TRANSPARENT : C_PENDING;
             }
-            if (i == cur && w.state == State.PENDING) spans.add(new BackgroundColorSpan(C_CURRENT_BG));
+            if (i == cur && shown == State.PENDING) spans.add(new BackgroundColorSpan(C_CURRENT_BG));
             spans.add(new ForegroundColorSpan(fg));
             for (Object o : spans) sp.setSpan(o, wordStart[i], wordEnd[i], Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             wordSpans[i] = spans.toArray();
@@ -253,9 +256,10 @@ public class ReciteActivity extends Activity {
         int before = shownPos;
         List<Mistake> mistakes = tracker.onResult(text, isFinal);
         int after = tracker.position();
-        refreshWords(committedPos, Math.max(before, after) + 1);
-        shownPos = after;
+        int from = committedPos;
         if (isFinal) committedPos = after;
+        refreshWords(from, Math.max(before, after) + 1);
+        shownPos = after;
         updateStatus();
         if (after != before) scrollToCurrent();
         if (!mistakes.isEmpty()) alertMistakes(mistakes);

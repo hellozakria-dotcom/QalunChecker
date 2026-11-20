@@ -29,6 +29,9 @@ public final class WhisperEngine implements AutoCloseable {
     private final OrtEnvironment env;
     private final OrtSession encoder, decoder;
     private final String encIn, decIds, decHidden;
+    private final java.util.List<String> pastInputs = new ArrayList<>();
+    private String useCacheInput;
+    private final int heads, headDim;
     private final MelSpectrogram mel;
     private final WhisperTokenizer tokenizer;
     private final long[] prompt;
@@ -61,12 +64,16 @@ public final class WhisperEngine implements AutoCloseable {
         so.setIntraOpNumThreads(Math.max(1, threads));
         so.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
         encoder = env.createSession(new File(dir, "encoder.onnx").getAbsolutePath(), so);
-        decoder = env.createSession(new File(dir, "decoder.onnx").getAbsolutePath(), so);
+        decoder = env.createSession(new File(dir, "decoder_merged.onnx").getAbsolutePath(), so);
+        heads = Integer.parseInt(p.getProperty("heads"));
+        headDim = Integer.parseInt(p.getProperty("head_dim"));
         encIn = encoder.getInputNames().iterator().next();
         String ids = null, hid = null;
         for (String n : decoder.getInputNames()) {
             if (n.contains("input_ids")) ids = n;
             else if (n.contains("encoder_hidden")) hid = n;
+            else if (n.startsWith("past_key_values")) pastInputs.add(n);
+            else if (n.contains("use_cache")) useCacheInput = n;
         }
         if (ids == null || hid == null) throw new IllegalStateException("unexpected decoder inputs: " + decoder.getInputNames());
         decIds = ids;
@@ -79,42 +86,57 @@ public final class WhisperEngine implements AutoCloseable {
         try (OnnxTensor in = OnnxTensor.createTensor(env, FloatBuffer.wrap(feats), new long[]{1, MelSpectrogram.N_MELS, MelSpectrogram.N_FRAMES});
              OrtSession.Result er = encoder.run(singleton(encIn, in))) {
             OnnxTensor hidden = (OnnxTensor) er.get(0);
-            List<Long> seq = new ArrayList<>();
-            for (long t : prompt) seq.add(t);
             List<Integer> out = new ArrayList<>();
-            for (int step = 0; step < MAX_TOKENS; step++) {
-                long[] arr = new long[seq.size()];
-                for (int i = 0; i < arr.length; i++) arr[i] = seq.get(i);
-                int next;
-                try (OnnxTensor idsT = OnnxTensor.createTensor(env, LongBuffer.wrap(arr), new long[]{1, arr.length})) {
-                    Map<String, OnnxTensor> inputs = new HashMap<>();
+            // KV cache: each step feeds only the newest token plus the attention memory of the
+            // previous steps, instead of re-reading the whole sentence.
+            Map<String, OnnxTensor> past = new HashMap<>();
+            OnnxTensor empty = OnnxTensor.createTensor(env, FloatBuffer.allocate(0), new long[]{1, heads, 0, headDim});
+            for (String n : pastInputs) past.put(n, empty);
+            OrtSession.Result prev = null;
+            long[] ids = prompt.clone();
+            try {
+                for (int step = 0; step < MAX_TOKENS; step++) {
+                    Map<String, OnnxTensor> inputs = new HashMap<>(past);
+                    OnnxTensor idsT = OnnxTensor.createTensor(env, LongBuffer.wrap(ids), new long[]{1, ids.length});
+                    OnnxTensor useCache = useCacheInput == null ? null
+                            : OnnxTensor.createTensor(env, new boolean[]{step > 0});
                     inputs.put(decIds, idsT);
                     inputs.put(decHidden, hidden);
-                    try (OrtSession.Result dr = decoder.run(inputs)) {
-                        OnnxTensor logits = (OnnxTensor) dr.get(0);
-                        long[] shape = logits.getInfo().getShape(); // [1, len, vocab]
-                        int vocab = (int) shape[2];
-                        FloatBuffer fb = logits.getFloatBuffer();
-                        int base = (arr.length - 1) * vocab;
-                        next = eot;
-                        float best = Float.NEGATIVE_INFINITY;
-                        int limit = Math.min(vocab, vocabLimit);
-                        for (int v = 0; v < limit; v++) {
-                            if (v > eot) continue; // suppress special / timestamp tokens
-                            if (suppress.contains(v) || (step == 0 && beginSuppress.contains(v))) continue;
-                            float x = fb.get(base + v);
-                            if (x > best) { best = x; next = v; }
-                        }
+                    if (useCache != null) inputs.put(useCacheInput, useCache);
+                    OrtSession.Result r = decoder.run(inputs);
+                    idsT.close();
+                    if (useCache != null) useCache.close();
+                    if (prev != null) prev.close(); // its tensors were this step's past
+                    prev = r;
+
+                    OnnxTensor logits = (OnnxTensor) r.get("logits").orElse(r.get(0));
+                    long[] shape = logits.getInfo().getShape(); // [1, len, vocab]
+                    int vocab = (int) shape[2];
+                    FloatBuffer fb = logits.getFloatBuffer();
+                    int base = (int) (shape[1] - 1) * vocab;
+                    int next = eot;
+                    float best = Float.NEGATIVE_INFINITY;
+                    int limit = Math.min(vocab, vocabLimit);
+                    for (int v = 0; v < limit; v++) {
+                        if (v > eot) continue; // suppress special / timestamp tokens
+                        if (suppress.contains(v) || (step == 0 && beginSuppress.contains(v))) continue;
+                        float x = fb.get(base + v);
+                        if (x > best) { best = x; next = v; }
                     }
+                    if (next == eot) break;
+                    out.add(next);
+                    int rep = repeatedTail(out);
+                    if (rep > 0) { // model got stuck repeating itself: drop the repeats and stop
+                        out.subList(out.size() - rep, out.size()).clear();
+                        break;
+                    }
+                    for (String n : pastInputs)
+                        past.put(n, (OnnxTensor) r.get(n.replace("past_key_values", "present")).get());
+                    ids = new long[]{next};
                 }
-                if (next == eot) break;
-                out.add(next);
-                seq.add((long) next);
-                int rep = repeatedTail(out);
-                if (rep > 0) { // model got stuck repeating itself: drop the repeats and stop
-                    out.subList(out.size() - rep, out.size()).clear();
-                    break;
-                }
+            } finally {
+                if (prev != null) prev.close();
+                empty.close();
             }
             return tokenizer.decode(out);
         }

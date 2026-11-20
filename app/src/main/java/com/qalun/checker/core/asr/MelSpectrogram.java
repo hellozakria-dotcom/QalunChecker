@@ -12,18 +12,12 @@ public final class MelSpectrogram {
 
     private final float[] filters; // [N_MELS][N_FREQ] row-major
     private final double[] window = new double[N_FFT];
-    private final double[] cos = new double[N_FREQ * N_FFT], sin = new double[N_FREQ * N_FFT];
+    private final Fft fft = new Fft(N_FFT);
 
     public MelSpectrogram(float[] melFilters) {
         if (melFilters.length != N_MELS * N_FREQ) throw new IllegalArgumentException("mel filters must be 80x201");
         this.filters = melFilters;
         for (int n = 0; n < N_FFT; n++) window[n] = 0.5 - 0.5 * Math.cos(2 * Math.PI * n / N_FFT);
-        for (int k = 0; k < N_FREQ; k++)
-            for (int n = 0; n < N_FFT; n++) {
-                double a = 2 * Math.PI * k * n / N_FFT;
-                cos[k * N_FFT + n] = Math.cos(a);
-                sin[k * N_FFT + n] = Math.sin(a);
-            }
     }
 
     /** Returns features as [N_MELS * N_FRAMES] (mel-major), ready for input_features [1,80,3000]. */
@@ -34,7 +28,7 @@ public final class MelSpectrogram {
         double[] logMel = new double[N_MELS * N_FRAMES];
         // frames that touch real audio; the rest see only zeros
         int activeFrames = Math.min(N_FRAMES, (len + half) / HOP + 2);
-        double[] frame = new double[N_FFT];
+        double[] frame = new double[N_FFT], re = new double[N_FFT], im = new double[N_FFT];
         double[] power = new double[N_FREQ];
         double maxVal = -Double.MAX_VALUE;
         for (int t = 0; t < N_FRAMES; t++) {
@@ -47,17 +41,8 @@ public final class MelSpectrogram {
                     double v = p < len ? audio[p] : 0.0;
                     frame[n] = v * window[n];
                 }
-                for (int k = 0; k < N_FREQ; k++) {
-                    double re = 0, im = 0;
-                    int base = k * N_FFT;
-                    for (int n = 0; n < N_FFT; n++) {
-                        double f = frame[n];
-                        if (f == 0) continue;
-                        re += f * cos[base + n];
-                        im -= f * sin[base + n];
-                    }
-                    power[k] = re * re + im * im;
-                }
+                fft.transform(frame, re, im);
+                for (int k = 0; k < N_FREQ; k++) power[k] = re[k] * re[k] + im[k] * im[k];
             } else {
                 java.util.Arrays.fill(power, 0.0);
             }
@@ -74,5 +59,59 @@ public final class MelSpectrogram {
         double floor = maxVal - 8.0;
         for (int i = 0; i < out.length; i++) out[i] = (float) ((Math.max(logMel[i], floor) + 4.0) / 4.0);
         return out;
+    }
+
+    /** Recursive mixed-radix (2/3/5, generic fallback) complex FFT for real input. */
+    static final class Fft {
+        private final int n;
+        private final double[] wr, wi;
+
+        Fft(int n) {
+            this.n = n;
+            wr = new double[n];
+            wi = new double[n];
+            for (int k = 0; k < n; k++) { wr[k] = Math.cos(-2 * Math.PI * k / n); wi[k] = Math.sin(-2 * Math.PI * k / n); }
+        }
+
+        void transform(double[] x, double[] outRe, double[] outIm) {
+            double[] xr = x.clone(), xi = new double[n];
+            rec(xr, xi, 0, 1, n, outRe, outIm, 0);
+        }
+
+        // DFT of the subsequence x[off + stride*j], j < len, written to out[pos .. pos+len)
+        private void rec(double[] xr, double[] xi, int off, int stride, int len, double[] or, double[] oi, int pos) {
+            if (len == 1) { or[pos] = xr[off]; oi[pos] = xi[off]; return; }
+            int p = len % 2 == 0 ? 2 : len % 5 == 0 ? 5 : len % 3 == 0 ? 3 : len;
+            int m = len / p;
+            if (p == len) { // plain DFT for a prime remainder
+                for (int k = 0; k < len; k++) {
+                    double sr = 0, si = 0;
+                    for (int j = 0; j < len; j++) {
+                        int t = (int) ((long) j * k % len) * (n / len);
+                        double ar = xr[off + stride * j], ai = xi[off + stride * j];
+                        sr += ar * wr[t] - ai * wi[t];
+                        si += ar * wi[t] + ai * wr[t];
+                    }
+                    or[pos + k] = sr; oi[pos + k] = si;
+                }
+                return;
+            }
+            double[] sr = new double[len], si = new double[len];
+            for (int q = 0; q < p; q++) rec(xr, xi, off + stride * q, stride * p, m, sr, si, q * m);
+            int step = n / len;
+            for (int k = 0; k < m; k++) {
+                for (int r = 0; r < p; r++) {
+                    int kk = k + r * m;
+                    double accR = 0, accI = 0;
+                    for (int q = 0; q < p; q++) {
+                        int t = (int) ((long) q * kk % len) * step;
+                        double ar = sr[q * m + k], ai = si[q * m + k];
+                        accR += ar * wr[t] - ai * wi[t];
+                        accI += ar * wi[t] + ai * wr[t];
+                    }
+                    or[pos + kk] = accR; oi[pos + kk] = accI;
+                }
+            }
+        }
     }
 }

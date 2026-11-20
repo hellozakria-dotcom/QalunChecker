@@ -7,7 +7,7 @@ on:
 env:
   MODEL_ID: tarteel-ai/whisper-tiny-ar-quran
   ORT_VERSION: 1.20.0
-  MODEL_VARIANT: mixed
+  MODEL_VARIANT: fp32
 
 jobs:
   build:

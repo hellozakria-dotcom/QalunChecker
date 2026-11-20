@@ -17,30 +17,25 @@ for f in os.listdir(base):
         shutil.copy(os.path.join(base, f), os.path.join(local, f)); print("added from openai/whisper-tiny:", f)
 print("model files:", sorted(os.listdir(local)))
 model_id = local
-main_export(model_id, output=tmp, task="automatic-speech-recognition", no_post_process=True)
+main_export(model_id, output=tmp, task="automatic-speech-recognition-with-past")  # merged decoder with KV cache
 print("exported:", os.listdir(tmp))
-VARIANTS = ("fp32", "int8", "mixed", "mixedpc")
+VARIANTS = ("fp32", "int8", "mixed")
 for variant in ("fp32", "int8"):
     d = os.path.join(out, variant); os.makedirs(d, exist_ok=True)
-    for part in ("encoder", "decoder"):
-        src = os.path.join(tmp, f"{part}_model.onnx")
-        dst = os.path.join(d, f"{part}.onnx")
+    for part, srcname, dstname in (("encoder", "encoder_model.onnx", "encoder.onnx"),
+                                   ("decoder", "decoder_model_merged.onnx", "decoder_merged.onnx")):
+        src = os.path.join(tmp, srcname)
+        dst = os.path.join(d, dstname)
         if variant == "fp32":
             shutil.copy(src, dst)
             if os.path.exists(src + "_data"): shutil.copy(src + "_data", dst + "_data")
         else:
             quantize_dynamic(src, dst, weight_type=QuantType.QUInt8, op_types_to_quantize=["MatMul", "Gather"])
 
-# mixed: full-precision encoder (the "ear"), compressed decoder
+# mixed: full-precision encoder, compressed decoder
 os.makedirs(os.path.join(out, "mixed"), exist_ok=True)
 shutil.copy(os.path.join(out, "fp32", "encoder.onnx"), os.path.join(out, "mixed", "encoder.onnx"))
-shutil.copy(os.path.join(out, "int8", "decoder.onnx"), os.path.join(out, "mixed", "decoder.onnx"))
-
-# mixedpc: full-precision encoder, decoder compressed per channel (finer, more accurate)
-os.makedirs(os.path.join(out, "mixedpc"), exist_ok=True)
-shutil.copy(os.path.join(out, "fp32", "encoder.onnx"), os.path.join(out, "mixedpc", "encoder.onnx"))
-quantize_dynamic(os.path.join(tmp, "decoder_model.onnx"), os.path.join(out, "mixedpc", "decoder.onnx"),
-                 weight_type=QuantType.QUInt8, per_channel=True, op_types_to_quantize=["MatMul"])
+shutil.copy(os.path.join(out, "int8", "decoder_merged.onnx"), os.path.join(out, "mixed", "decoder_merged.onnx"))
 
 tok = WhisperTokenizer.from_pretrained(model_id)
 vocab = tok.get_vocab()
@@ -49,7 +44,9 @@ cfg = WhisperConfig.from_pretrained(model_id)
 fe = WhisperFeatureExtractor.from_pretrained(model_id)
 ids = lambda t: tok.convert_tokens_to_ids(t)
 props = {"sot": ids("<|startoftranscript|>"), "lang_ar": ids("<|ar|>"), "transcribe": ids("<|transcribe|>"),
-         "notimestamps": ids("<|notimestamps|>"), "eot": ids("<|endoftext|>"), "vocab_size": cfg.vocab_size}
+         "notimestamps": ids("<|notimestamps|>"), "eot": ids("<|endoftext|>"), "vocab_size": cfg.vocab_size,
+         "layers": cfg.decoder_layers, "heads": cfg.decoder_attention_heads,
+         "head_dim": cfg.d_model // cfg.decoder_attention_heads}
 try:
     gc = GenerationConfig.from_pretrained(model_id)
     props["suppress"] = ",".join(str(x) for x in (gc.suppress_tokens or []))
