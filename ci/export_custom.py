@@ -15,6 +15,7 @@ from transformers import WhisperForConditionalGeneration, WhisperTokenizer, Whis
 src, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
 model = WhisperForConditionalGeneration.from_pretrained(src, torch_dtype=torch.float32).eval()
+for _p in model.parameters(): _p.requires_grad_(False)  # weights are constants in the exported graphs
 cfg = model.config
 L, H, Dm = cfg.decoder_layers, cfg.decoder_attention_heads, cfg.d_model
 D = Dm // H
