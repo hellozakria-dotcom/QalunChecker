@@ -28,10 +28,7 @@ import java.util.Properties;
 public final class WhisperEngine implements AutoCloseable {
     private final OrtEnvironment env;
     private final OrtSession encoder, decoder;
-    private final String encIn, decIds, decHidden;
-    private final java.util.List<String> pastInputs = new ArrayList<>();
-    private String useCacheInput, cachePosInput;
-    private final int heads, headDim;
+    private final int layers, heads, headDim;
     private final MelSpectrogram mel;
     private final WhisperTokenizer tokenizer;
     private final long[] prompt;
@@ -64,75 +61,53 @@ public final class WhisperEngine implements AutoCloseable {
         so.setIntraOpNumThreads(Math.max(1, threads));
         so.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
         encoder = env.createSession(new File(dir, "encoder.onnx").getAbsolutePath(), so);
-        decoder = env.createSession(new File(dir, "decoder_merged.onnx").getAbsolutePath(), so);
+        decoder = env.createSession(new File(dir, "decoder.onnx").getAbsolutePath(), so);
+        layers = Integer.parseInt(p.getProperty("layers"));
         heads = Integer.parseInt(p.getProperty("heads"));
         headDim = Integer.parseInt(p.getProperty("head_dim"));
-        encIn = encoder.getInputNames().iterator().next();
-        String ids = null, hid = null;
-        for (String n : decoder.getInputNames()) {
-            if (n.contains("input_ids")) ids = n;
-            else if (n.contains("encoder_hidden")) hid = n;
-            else if (n.startsWith("past_key_values")) pastInputs.add(n);
-            else if (n.contains("use_cache")) useCacheInput = n;
-            else if (n.contains("cache_position")) cachePosInput = n;
-        }
-        if (ids == null || hid == null) throw new IllegalStateException("unexpected decoder inputs: " + decoder.getInputNames());
-        decIds = ids;
-        decHidden = hid;
     }
 
     /** @param audio 16 kHz mono samples in [-1, 1], up to 30 s. */
     public String transcribe(float[] audio) throws OrtException {
         float[] feats = mel.compute(audio);
+        List<Integer> out = new ArrayList<>();
         try (OnnxTensor in = OnnxTensor.createTensor(env, FloatBuffer.wrap(feats), new long[]{1, MelSpectrogram.N_MELS, MelSpectrogram.N_FRAMES});
-             OrtSession.Result er = encoder.run(singleton(encIn, in))) {
-            OnnxTensor hidden = (OnnxTensor) er.get(0);
-            List<Integer> out = new ArrayList<>();
-            // KV cache: each step feeds only the newest token plus the attention memory of the
-            // previous steps, instead of re-reading the whole sentence.
-            Map<String, OnnxTensor> past = new HashMap<>();
-            // first step runs the no-cache branch; it still needs well-formed placeholder memory
-            OnnxTensor empty = OnnxTensor.createTensor(env, FloatBuffer.allocate(heads * headDim), new long[]{1, heads, 1, headDim});
-            for (String n : pastInputs) past.put(n, empty);
+             OrtSession.Result er = encoder.run(singleton("input_features", in))) {
+            OnnxTensor crossK = (OnnxTensor) er.get(0), crossV = (OnnxTensor) er.get(1);
+            // KV cache: each step gives the decoder only the newest token plus its memory
+            OnnxTensor pastK = OnnxTensor.createTensor(env, FloatBuffer.allocate(0), new long[]{layers, 1, heads, 0, headDim});
+            OnnxTensor pastV = OnnxTensor.createTensor(env, FloatBuffer.allocate(0), new long[]{layers, 1, heads, 0, headDim});
             OrtSession.Result prev = null;
             long[] ids = prompt.clone();
-            long position = 0; // index of ids[0] in the whole token sequence
+            long offset = 0;
             try {
                 for (int step = 0; step < MAX_TOKENS; step++) {
-                    Map<String, OnnxTensor> inputs = new HashMap<>(past);
+                    Map<String, OnnxTensor> inputs = new HashMap<>();
                     OnnxTensor idsT = OnnxTensor.createTensor(env, LongBuffer.wrap(ids), new long[]{1, ids.length});
-                    OnnxTensor useCache = useCacheInput == null ? null
-                            : OnnxTensor.createTensor(env, new boolean[]{step > 0});
-                    inputs.put(decIds, idsT);
-                    inputs.put(decHidden, hidden);
-                    if (useCache != null) inputs.put(useCacheInput, useCache);
-                    OnnxTensor cachePos = null;
-                    if (cachePosInput != null) {
-                        long[] pos = new long[ids.length];
-                        for (int k = 0; k < pos.length; k++) pos[k] = position + k;
-                        cachePos = OnnxTensor.createTensor(env, LongBuffer.wrap(pos), new long[]{pos.length});
-                        inputs.put(cachePosInput, cachePos);
-                    }
-                    position += ids.length;
+                    OnnxTensor offT = OnnxTensor.createTensor(env, LongBuffer.wrap(new long[]{offset}), new long[]{1});
+                    inputs.put("input_ids", idsT);
+                    inputs.put("offset", offT);
+                    inputs.put("past_k", pastK);
+                    inputs.put("past_v", pastV);
+                    inputs.put("cross_k", crossK);
+                    inputs.put("cross_v", crossV);
                     OrtSession.Result r = decoder.run(inputs);
                     idsT.close();
-                    if (useCache != null) useCache.close();
-                    if (cachePos != null) cachePos.close();
-                    if (prev != null) prev.close(); // its tensors were this step's past
+                    offT.close();
+                    if (prev != null) prev.close(); // its tensors were this step's memory
+                    else { pastK.close(); pastV.close(); }
                     prev = r;
+                    offset += ids.length;
 
-                    OnnxTensor logits = (OnnxTensor) r.get("logits").orElse(r.get(0));
-                    long[] shape = logits.getInfo().getShape(); // [1, len, vocab]
-                    int vocab = (int) shape[2];
-                    FloatBuffer fb = logits.getFloatBuffer();
-                    int base = (int) (shape[1] - 1) * vocab;
+                    FloatBuffer fb = ((OnnxTensor) r.get(0)).getFloatBuffer(); // [1, V]
+                    int vocab = fb.remaining();
                     int next = eot;
                     float best = Float.NEGATIVE_INFINITY;
                     int limit = Math.min(vocab, vocabLimit);
                     for (int v = 0; v < limit; v++) {
                         if (v > eot) continue; // suppress special / timestamp tokens
                         if (suppress.contains(v) || (step == 0 && beginSuppress.contains(v))) continue;
-                        float x = fb.get(base + v);
+                        float x = fb.get(v);
                         if (x > best) { best = x; next = v; }
                     }
                     if (next == eot) break;
@@ -142,16 +117,15 @@ public final class WhisperEngine implements AutoCloseable {
                         out.subList(out.size() - rep, out.size()).clear();
                         break;
                     }
-                    for (String n : pastInputs)
-                        past.put(n, (OnnxTensor) r.get(n.replace("past_key_values", "present")).get());
+                    pastK = (OnnxTensor) r.get(1);
+                    pastV = (OnnxTensor) r.get(2);
                     ids = new long[]{next};
                 }
             } finally {
                 if (prev != null) prev.close();
-                empty.close();
             }
-            return tokenizer.decode(out);
         }
+        return tokenizer.decode(out);
     }
 
     private static void parseList(String s, java.util.Set<Integer> into) {
